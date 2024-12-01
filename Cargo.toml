@@ -1,0 +1,16 @@
+[package]
+name = "llamatrix"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.93"
+clap = { version = "4.5.21", features = ["derive"] }
+dirs = "5.0.1"
+log = "0.4.22"
+matrix-sdk = { version = "0.8.0", default-features = false, features = ["rustls-tls", "e2e-encryption", "bundled-sqlite"] }
+reqwest = { version = "0.12.9", default-features = false, features = ["rustls-tls", "json"] }
+serde = { version = "1.0.215", features = ["derive"] }
+serde_json = "1.0.133"
+tokio = { version = "1.41.1", features = ["rt-multi-thread"] }
+tracing-subscriber = "0.3.19"
