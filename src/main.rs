@@ -131,13 +131,17 @@ async fn handle_msg_event(
 
     match evt.content.msgtype {
         MessageType::Text(txt) => {
-            if !rm.is_direct().await.unwrap() && !txt.body.starts_with("!llama") {
+            let matched = txt.body.strip_prefix("!llama");
+
+            if !rm.is_direct().await.unwrap() && !matched.is_some() {
                 return;
             }
 
+            let prompt = matched.unwrap_or_else(|| txt.body.as_str());
+
             let _ = rm.typing_notice(true).await;
 
-            let (req, mut rx) = LlamaReq::new(rm.room_id().into(), txt.body);
+            let (req, mut rx) = LlamaReq::new(rm.room_id().into(), prompt);
 
             ctx.send(req).await.unwrap();
 
