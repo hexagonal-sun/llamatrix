@@ -62,21 +62,26 @@ fn get_data_dir() -> PathBuf {
     dirs::data_dir().unwrap().join("llamatrix")
 }
 
-struct LlamaReq {
+enum LlamaReq {
+    Chat(LlamaChatReq),
+    ClrCtx(OwnedRoomId),
+}
+
+struct LlamaChatReq {
     room_id: OwnedRoomId,
     prompt: String,
     reply_tx: oneshot::Sender<String>,
 }
 
-impl LlamaReq {
-    fn new(room_id: OwnedRoomId, prompt: impl ToString) -> (Self, oneshot::Receiver<String>) {
+impl LlamaChatReq {
+    fn new(room_id: OwnedRoomId, prompt: impl ToString) -> (LlamaReq, oneshot::Receiver<String>) {
         let (tx, rx) = channel();
         (
-            Self {
+            LlamaReq::Chat(Self {
                 room_id,
                 prompt: prompt.to_string(),
                 reply_tx: tx,
-            },
+            }),
             rx,
         )
     }
@@ -85,24 +90,35 @@ impl LlamaReq {
 async fn llama_task(mut rx: Receiver<LlamaReq>, url: Url, model: String) {
     let mut state: HashMap<OwnedRoomId, Chat> = HashMap::new();
 
-    while let Some(req) = rx.recv().await {
-        let mut chat = state
-            .remove(&req.room_id)
-            .unwrap_or_else(|| Chat::new(model.clone(), url.clone()));
+    loop {
+        match rx.recv().await {
+            Some(LlamaReq::Chat(chat_req)) => {
+                let mut chat = state
+                    .remove(&chat_req.room_id)
+                    .unwrap_or_else(|| Chat::new(model.clone(), url.clone()));
 
-        match chat.message(req.prompt).await {
-            Ok(resp) => {
-                req.reply_tx.send(resp).unwrap();
+                match chat.message(chat_req.prompt).await {
+                    Ok(resp) => {
+                        chat_req.reply_tx.send(resp).unwrap();
+                    }
+                    Err(e) => {
+                        error!("Failed to generate response from ollama: {}", e);
+                    }
+                }
+                state.insert(chat_req.room_id, chat);
             }
-            Err(e) => {
-                error!("Failed to generate response from ollama: {}", e);
+            Some(LlamaReq::ClrCtx(rm)) => {
+                state.remove(&rm);
+            }
+            None => {
+                return;
             }
         }
-        state.insert(req.room_id, chat);
     }
 }
 
 async fn accept_invites(evt: StrippedRoomMemberEvent, client: Client, rm: Room) {
+    dbg!(&evt);
     if evt.state_key != client.user_id().unwrap() {
         return;
     }
@@ -139,9 +155,21 @@ async fn handle_msg_event(
 
             let prompt = matched.unwrap_or_else(|| txt.body.as_str());
 
+            if prompt == "!llamaclear" {
+                ctx.send(LlamaReq::ClrCtx(rm.room_id().into()))
+                    .await
+                    .unwrap();
+
+                rm.send(RoomMessageEventContent::text_plain("Context cleared"))
+                    .await
+                    .unwrap();
+
+                return;
+            }
+
             let _ = rm.typing_notice(true).await;
 
-            let (req, mut rx) = LlamaReq::new(rm.room_id().into(), prompt);
+            let (req, mut rx) = LlamaChatReq::new(rm.room_id().into(), prompt);
 
             ctx.send(req).await.unwrap();
 
